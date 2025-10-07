@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Hello World</title>
+  <style>
+    :root {
+      color-scheme: light;
+    }
+
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      margin: 2rem;
+      background: #f6f7fb;
+      color: #1f1f1f;
+    }
+
+    .gallery {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1.5rem;
+      align-items: flex-start;
+    }
+
+    .frame {
+      width: 200px;
+      border: 1px solid #d7d9e0;
+      border-radius: 12px;
+      padding: 0.75rem;
+      background: #ffffff;
+      box-shadow: 0 2px 6px rgba(15, 23, 42, 0.08);
+    }
+
+    .frame figcaption {
+      font-size: 0.95rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+    }
+
+    .frame img,
+    .frame canvas {
+      width: 100%;
+      height: auto;
+      display: block;
+      border-radius: 8px;
+    }
+
+    .frame canvas {
+      background: #f0f1f6;
+    }
+  </style>
+</head>
+<body>
+  <section class="gallery">
+    <figure class="frame">
+      <figcaption>1. Load File</figcaption>
+      <img id="original-img" src="input_mouse.jpeg" alt="Mouse input sample">
+    </figure>
+    <figure class="frame">
+      <figcaption>Output</figcaption>
+      <canvas id="output-canvas"></canvas>
+    </figure>
+  </section>
+  <main id="app"></main>
+  <script defer src="https://docs.opencv.org/4.x/opencv.js"></script>
+  <script defer src="main.js"></script>
+</body>
+</html>
