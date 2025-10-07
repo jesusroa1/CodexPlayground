@@ -21,6 +21,7 @@ function processMouseImage() {
 
   const matsToRelease = [];
   let kernel;
+  let secondaryKernel;
   let contours;
   let hierarchy;
 
@@ -43,54 +44,217 @@ function processMouseImage() {
 
     const frameArea = working.rows * working.cols;
 
+    const rgb = new cv.Mat();
+    cv.cvtColor(working, rgb, cv.COLOR_RGBA2RGB);
+    matsToRelease.push(rgb);
+
+    const grabCutMask = new cv.Mat();
+    grabCutMask.create(working.rows, working.cols, cv.CV_8UC1);
+    grabCutMask.setTo(new cv.Scalar(cv.GC_PR_BGD));
+    matsToRelease.push(grabCutMask);
+
+    const bgdModel = new cv.Mat();
+    bgdModel.create(1, 65, cv.CV_64FC1);
+    bgdModel.setTo(new cv.Scalar(0));
+    matsToRelease.push(bgdModel);
+
+    const fgdModel = new cv.Mat();
+    fgdModel.create(1, 65, cv.CV_64FC1);
+    fgdModel.setTo(new cv.Scalar(0));
+    matsToRelease.push(fgdModel);
+
     const gray = new cv.Mat();
-    cv.cvtColor(working, gray, cv.COLOR_RGBA2GRAY);
+    cv.cvtColor(rgb, gray, cv.COLOR_RGB2GRAY);
     matsToRelease.push(gray);
 
-    const blurred = new cv.Mat();
-    cv.GaussianBlur(gray, blurred, new cv.Size(9, 9), 0);
-    matsToRelease.push(blurred);
+    const grayBlurred = new cv.Mat();
+    cv.GaussianBlur(gray, grayBlurred, new cv.Size(5, 5), 0);
+    matsToRelease.push(grayBlurred);
 
-    const binary = new cv.Mat();
-    cv.threshold(blurred, binary, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
-    matsToRelease.push(binary);
+    const darkMask = new cv.Mat();
+    cv.threshold(grayBlurred, darkMask, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+    matsToRelease.push(darkMask);
 
-    kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(7, 7));
-    cv.morphologyEx(binary, binary, cv.MORPH_CLOSE, kernel);
+    const centralMask = cv.Mat.zeros(darkMask.rows, darkMask.cols, cv.CV_8UC1);
+    matsToRelease.push(centralMask);
+    const centralMargin = Math.round(Math.min(working.rows, working.cols) * 0.12);
+    const centralX = Math.min(Math.max(0, centralMargin), Math.max(0, darkMask.cols - 2));
+    const centralY = Math.min(Math.max(0, centralMargin), Math.max(0, darkMask.rows - 2));
+    let centralWidth = Math.max(1, darkMask.cols - centralX * 2);
+    let centralHeight = Math.max(1, darkMask.rows - centralY * 2);
+    centralWidth = Math.min(centralWidth, darkMask.cols - centralX);
+    centralHeight = Math.min(centralHeight, darkMask.rows - centralY);
+    cv.rectangle(
+      centralMask,
+      new cv.Point(centralX, centralY),
+      new cv.Point(centralX + centralWidth - 1, centralY + centralHeight - 1),
+      new cv.Scalar(255),
+      cv.FILLED
+    );
+    cv.bitwise_and(darkMask, centralMask, darkMask);
+
+    const seedContours = new cv.MatVector();
+    const seedHierarchy = new cv.Mat();
+    cv.findContours(darkMask, seedContours, seedHierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+    const sureForegroundMask = cv.Mat.zeros(darkMask.rows, darkMask.cols, cv.CV_8UC1);
+    const probableForegroundMask = cv.Mat.zeros(darkMask.rows, darkMask.cols, cv.CV_8UC1);
+    matsToRelease.push(sureForegroundMask, probableForegroundMask);
+
+    let seedBestIndex = -1;
+    let seedBestArea = 0;
+    for (let i = 0; i < seedContours.size(); i++) {
+      const contour = seedContours.get(i);
+      const area = cv.contourArea(contour);
+      if (area > seedBestArea) {
+        seedBestArea = area;
+        seedBestIndex = i;
+      }
+    }
+
+    let useMaskForGrabCut = false;
+    if (seedBestIndex !== -1) {
+      useMaskForGrabCut = true;
+      cv.drawContours(sureForegroundMask, seedContours, seedBestIndex, new cv.Scalar(255), cv.FILLED);
+      const refineKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5, 5));
+      matsToRelease.push(refineKernel);
+      cv.morphologyEx(sureForegroundMask, sureForegroundMask, cv.MORPH_CLOSE, refineKernel);
+      cv.erode(sureForegroundMask, sureForegroundMask, refineKernel);
+
+      const probableKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(19, 19));
+      matsToRelease.push(probableKernel);
+      cv.dilate(sureForegroundMask, probableForegroundMask, probableKernel);
+      cv.bitwise_or(probableForegroundMask, sureForegroundMask, probableForegroundMask);
+    } else {
+      cv.rectangle(
+        probableForegroundMask,
+        new cv.Point(centralX, centralY),
+        new cv.Point(centralX + centralWidth - 1, centralY + centralHeight - 1),
+        new cv.Scalar(255),
+        cv.FILLED
+      );
+    }
+
+    for (let i = 0; i < seedContours.size(); i++) {
+      const contour = seedContours.get(i);
+      contour.delete();
+    }
+    seedContours.delete();
+    seedHierarchy.delete();
+
+    const borderMask = cv.Mat.zeros(grabCutMask.rows, grabCutMask.cols, cv.CV_8UC1);
+    matsToRelease.push(borderMask);
+    const borderBase = Math.max(3, Math.round(Math.min(working.rows, working.cols) * 0.05));
+    const borderX = Math.max(1, Math.min(borderBase, Math.floor(grabCutMask.cols / 2)));
+    const borderY = Math.max(1, Math.min(borderBase, Math.floor(grabCutMask.rows / 2)));
+    cv.rectangle(borderMask, new cv.Point(0, 0), new cv.Point(borderMask.cols - 1, borderY - 1), new cv.Scalar(255), cv.FILLED);
+    cv.rectangle(
+      borderMask,
+      new cv.Point(0, borderMask.rows - borderY),
+      new cv.Point(borderMask.cols - 1, borderMask.rows - 1),
+      new cv.Scalar(255),
+      cv.FILLED
+    );
+    cv.rectangle(borderMask, new cv.Point(0, 0), new cv.Point(borderX - 1, borderMask.rows - 1), new cv.Scalar(255), cv.FILLED);
+    cv.rectangle(
+      borderMask,
+      new cv.Point(borderMask.cols - borderX, 0),
+      new cv.Point(borderMask.cols - 1, borderMask.rows - 1),
+      new cv.Scalar(255),
+      cv.FILLED
+    );
+    grabCutMask.setTo(new cv.Scalar(cv.GC_BGD), borderMask);
+
+    const probableForegroundCount = cv.countNonZero(probableForegroundMask);
+    if (probableForegroundCount > 0) {
+      grabCutMask.setTo(new cv.Scalar(cv.GC_PR_FGD), probableForegroundMask);
+    }
+
+    const sureForegroundCount = cv.countNonZero(sureForegroundMask);
+    if (useMaskForGrabCut && sureForegroundCount > 0) {
+      grabCutMask.setTo(new cv.Scalar(cv.GC_FGD), sureForegroundMask);
+    }
+
+    const padding = Math.round(Math.min(working.rows, working.cols) * 0.08);
+    const rectX = Math.min(Math.max(0, padding), Math.max(0, working.cols - 2));
+    const rectY = Math.min(Math.max(0, padding), Math.max(0, working.rows - 2));
+    let rectWidth = Math.max(1, working.cols - rectX * 2);
+    let rectHeight = Math.max(1, working.rows - rectY * 2);
+    rectWidth = Math.min(rectWidth, working.cols - rectX);
+    rectHeight = Math.min(rectHeight, working.rows - rectY);
+    const rect = new cv.Rect(rectX, rectY, rectWidth, rectHeight);
+
+    if (typeof cv.grabCut !== 'function') {
+      throw new Error('cv.grabCut is unavailable in this build of OpenCV.js');
+    }
+
+    const grabCutMode = useMaskForGrabCut && sureForegroundCount > 0
+      ? cv.GC_INIT_WITH_MASK
+      : cv.GC_INIT_WITH_RECT;
+
+    cv.grabCut(rgb, grabCutMask, rect, bgdModel, fgdModel, 5, grabCutMode);
+
+    const gcForeground = new cv.Mat();
+    const gcProbableForeground = new cv.Mat();
+    const gcForegroundValue = new cv.Mat(grabCutMask.rows, grabCutMask.cols, grabCutMask.type(), new cv.Scalar(cv.GC_FGD));
+    const gcProbableForegroundValue = new cv.Mat(grabCutMask.rows, grabCutMask.cols, grabCutMask.type(), new cv.Scalar(cv.GC_PR_FGD));
+    matsToRelease.push(gcForegroundValue, gcProbableForegroundValue);
+
+    cv.compare(grabCutMask, gcForegroundValue, gcForeground, cv.CMP_EQ);
+    cv.compare(grabCutMask, gcProbableForegroundValue, gcProbableForeground, cv.CMP_EQ);
+    matsToRelease.push(gcForeground, gcProbableForeground);
+
+    const combinedMask = new cv.Mat();
+    cv.bitwise_or(gcForeground, gcProbableForeground, combinedMask);
+    cv.bitwise_and(combinedMask, darkMask, combinedMask);
+    matsToRelease.push(combinedMask);
+
+    kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(13, 13));
+    cv.morphologyEx(combinedMask, combinedMask, cv.MORPH_CLOSE, kernel);
+
+    secondaryKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(7, 7));
+    cv.morphologyEx(combinedMask, combinedMask, cv.MORPH_OPEN, secondaryKernel);
+
+    const blurredMask = new cv.Mat();
+    cv.GaussianBlur(combinedMask, blurredMask, new cv.Size(5, 5), 0);
+    matsToRelease.push(blurredMask);
+
+    const binaryMask = new cv.Mat();
+    cv.threshold(blurredMask, binaryMask, 128, 255, cv.THRESH_BINARY);
+    matsToRelease.push(binaryMask);
 
     contours = new cv.MatVector();
     hierarchy = new cv.Mat();
-    cv.findContours(binary, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    cv.findContours(binaryMask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
     const minArea = frameArea * 0.002;
-    const maxArea = frameArea * 0.5;
-    let candidateIndex = -1;
-    let candidateArea = 0;
-    let fallbackIndex = -1;
-    let fallbackArea = 0;
-
+    const maxArea = frameArea * 0.2;
+    let bestIndex = -1;
+    let bestScore = Infinity;
     for (let i = 0; i < contours.size(); i++) {
       const contour = contours.get(i);
       const area = cv.contourArea(contour);
 
-      if (area > fallbackArea) {
-        fallbackArea = area;
-        fallbackIndex = i;
+      if (area < minArea || area > maxArea) {
+        continue;
       }
 
-      if (area >= minArea && area <= maxArea && area > candidateArea) {
-        candidateArea = area;
-        candidateIndex = i;
-      }
+      const contourMask = cv.Mat.zeros(binaryMask.rows, binaryMask.cols, cv.CV_8UC1);
+      cv.drawContours(contourMask, contours, i, new cv.Scalar(255), cv.FILLED);
+      const meanScalar = cv.mean(gray, contourMask);
+      const meanIntensity = Array.isArray(meanScalar) ? meanScalar[0] : meanScalar;
+      contourMask.delete();
 
-      contour.delete();
+      if (meanIntensity < bestScore) {
+        bestScore = meanIntensity;
+        bestIndex = i;
+      }
     }
 
-    const contourIndex = candidateIndex !== -1 ? candidateIndex : fallbackIndex;
-    if (contourIndex !== -1) {
+    if (bestIndex !== -1) {
       const red = new cv.Scalar(255, 0, 0, 255);
       const lineType = typeof cv.LINE_AA !== 'undefined' ? cv.LINE_AA : 8;
-      cv.drawContours(working, contours, contourIndex, red, 4, lineType);
+      cv.drawContours(working, contours, bestIndex, red, 3, lineType);
     } else {
       console.warn('No contour detected for the mouse outline.');
     }
@@ -100,8 +264,11 @@ function processMouseImage() {
     console.error('OpenCV processing failed:', error);
   } finally {
     if (hierarchy) hierarchy.delete();
-    if (contours) contours.delete();
+    if (contours) {
+      contours.delete();
+    }
     if (kernel) kernel.delete();
+    if (secondaryKernel) secondaryKernel.delete();
     matsToRelease.forEach((mat) => {
       if (mat && typeof mat.delete === 'function') {
         mat.delete();
