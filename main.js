@@ -1,8 +1,11 @@
 let cvRuntimeReady = false;
 let imageReady = false;
 let alreadyProcessed = false;
+let coasterImageReady = false;
+let coasterProcessed = false;
 
 const originalImg = document.getElementById('original-img');
+const coasterImg = document.getElementById('coaster-img');
 
 function tryProcessMouse() {
   if (alreadyProcessed || !cvRuntimeReady || !imageReady) {
@@ -11,6 +14,14 @@ function tryProcessMouse() {
   alreadyProcessed = true;
   // Use rAF so the canvas has been laid out before drawing.
   window.requestAnimationFrame(processMouseImage);
+}
+
+function tryProcessCoaster() {
+  if (coasterProcessed || !cvRuntimeReady || !coasterImageReady) {
+    return;
+  }
+  coasterProcessed = true;
+  window.requestAnimationFrame(processCoasterImage);
 }
 
 function processMouseImage() {
@@ -277,6 +288,131 @@ function processMouseImage() {
   }
 }
 
+function processCoasterImage() {
+  const imageElement = document.getElementById('coaster-img');
+  if (!imageElement || typeof cv === 'undefined') {
+    return;
+  }
+
+  const matsToRelease = [];
+  let contours;
+  let hierarchy;
+
+  try {
+    const original = cv.imread(imageElement);
+    matsToRelease.push(original);
+
+    let working;
+    const maxWidth = 800;
+    if (original.cols > maxWidth) {
+      working = new cv.Mat();
+      const scale = maxWidth / original.cols;
+      const size = new cv.Size(Math.round(original.cols * scale), Math.round(original.rows * scale));
+      cv.resize(original, working, size, 0, 0, cv.INTER_AREA);
+      matsToRelease.push(working);
+    } else {
+      working = original.clone();
+      matsToRelease.push(working);
+    }
+
+    const rgb = new cv.Mat();
+    cv.cvtColor(working, rgb, cv.COLOR_RGBA2RGB);
+    matsToRelease.push(rgb);
+
+    const hsv = new cv.Mat();
+    cv.cvtColor(rgb, hsv, cv.COLOR_RGB2HSV);
+    matsToRelease.push(hsv);
+
+    const hsvChannels = new cv.MatVector();
+    cv.split(hsv, hsvChannels);
+    const _hue = hsvChannels.get(0);
+    const saturation = hsvChannels.get(1);
+    const value = hsvChannels.get(2);
+    matsToRelease.push(_hue, saturation, value);
+    hsvChannels.delete();
+
+    const saturationMask = new cv.Mat();
+    cv.threshold(saturation, saturationMask, 40, 255, cv.THRESH_BINARY);
+    matsToRelease.push(saturationMask);
+
+    const valueMask = new cv.Mat();
+    cv.threshold(value, valueMask, 215, 255, cv.THRESH_BINARY_INV);
+    matsToRelease.push(valueMask);
+
+    const combinedMask = new cv.Mat();
+    cv.bitwise_and(saturationMask, valueMask, combinedMask);
+    matsToRelease.push(combinedMask);
+
+    const centralMask = cv.Mat.zeros(combinedMask.rows, combinedMask.cols, cv.CV_8UC1);
+    const centerX = Math.floor(combinedMask.cols / 2);
+    const centerY = Math.floor(combinedMask.rows / 2);
+    const radius = Math.floor(Math.min(combinedMask.cols, combinedMask.rows) * 0.44);
+    cv.circle(centralMask, new cv.Point(centerX, centerY), radius, new cv.Scalar(255), cv.FILLED);
+    cv.bitwise_and(combinedMask, centralMask, combinedMask);
+    matsToRelease.push(centralMask);
+
+    const closingKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(41, 41));
+    cv.morphologyEx(combinedMask, combinedMask, cv.MORPH_CLOSE, closingKernel);
+    matsToRelease.push(closingKernel);
+
+    const openingKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(19, 19));
+    cv.morphologyEx(combinedMask, combinedMask, cv.MORPH_OPEN, openingKernel);
+    matsToRelease.push(openingKernel);
+
+    cv.GaussianBlur(combinedMask, combinedMask, new cv.Size(5, 5), 0);
+    cv.threshold(combinedMask, combinedMask, 128, 255, cv.THRESH_BINARY);
+
+    contours = new cv.MatVector();
+    hierarchy = new cv.Mat();
+    cv.findContours(combinedMask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+    const frameArea = working.rows * working.cols;
+    const minArea = frameArea * 0.04;
+    const maxArea = frameArea * 0.35;
+    let bestIndex = -1;
+    let bestCircularity = -Infinity;
+
+    for (let i = 0; i < contours.size(); i++) {
+      const contour = contours.get(i);
+      const area = cv.contourArea(contour);
+
+      if (area < minArea || area > maxArea) {
+        continue;
+      }
+
+      const perimeter = cv.arcLength(contour, true);
+      const circularity = perimeter > 0 ? (4 * Math.PI * area) / (perimeter * perimeter) : 0;
+
+      if (circularity > bestCircularity) {
+        bestCircularity = circularity;
+        bestIndex = i;
+      }
+    }
+
+    if (bestIndex !== -1) {
+      const red = new cv.Scalar(255, 0, 0, 255);
+      const lineType = typeof cv.LINE_AA !== 'undefined' ? cv.LINE_AA : 8;
+      cv.drawContours(working, contours, bestIndex, red, 4, lineType);
+    } else {
+      console.warn('No contour detected for the coaster outline.');
+    }
+
+    cv.imshow('coaster-output-canvas', working);
+  } catch (error) {
+    console.error('OpenCV coaster processing failed:', error);
+  } finally {
+    if (hierarchy) hierarchy.delete();
+    if (contours) {
+      contours.delete();
+    }
+    matsToRelease.forEach((mat) => {
+      if (mat && typeof mat.delete === 'function') {
+        mat.delete();
+      }
+    });
+  }
+}
+
 if (originalImg) {
   if (originalImg.complete && originalImg.naturalWidth !== 0) {
     imageReady = true;
@@ -293,6 +429,22 @@ if (originalImg) {
   console.warn('Original image element was not found.');
 }
 
+if (coasterImg) {
+  if (coasterImg.complete && coasterImg.naturalWidth !== 0) {
+    coasterImageReady = true;
+  } else {
+    coasterImg.addEventListener('load', () => {
+      coasterImageReady = true;
+      tryProcessCoaster();
+    }, { once: true });
+    coasterImg.addEventListener('error', () => {
+      console.error('Failed to load the coaster input image.');
+    }, { once: true });
+  }
+} else {
+  console.warn('Coaster image element was not found.');
+}
+
 function attachOpenCvListener() {
   if (typeof cv === 'undefined') {
     return false;
@@ -302,12 +454,14 @@ function attachOpenCvListener() {
     // Runtime already initialised.
     cvRuntimeReady = true;
     tryProcessMouse();
+    tryProcessCoaster();
     return true;
   }
 
   cv.onRuntimeInitialized = () => {
     cvRuntimeReady = true;
     tryProcessMouse();
+    tryProcessCoaster();
   };
   return true;
 }
@@ -329,4 +483,8 @@ if (!attachOpenCvListener()) {
 
 if (imageReady) {
   tryProcessMouse();
+}
+
+if (coasterImageReady) {
+  tryProcessCoaster();
 }
