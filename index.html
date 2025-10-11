@@ -24,12 +24,19 @@
     .gallery {
       display: flex;
       flex-wrap: wrap;
-      gap: 1.5rem;
+      gap: 2rem;
       align-items: flex-start;
     }
 
+    .inputs {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      flex: 0 0 220px;
+    }
+
     .frame {
-      width: 200px;
+      width: 220px;
       border: 1px solid #d7d9e0;
       border-radius: 12px;
       padding: 0.75rem;
@@ -59,10 +66,20 @@
 <body>
   <h1 class="page-title">Codex Playground</h1>
   <section class="gallery">
-    <figure class="frame">
-      <figcaption>1. Load File</figcaption>
-      <img id="original-img" src="input_mouse.jpeg" alt="Mouse input sample">
-    </figure>
+    <div class="inputs">
+      <figure class="frame">
+        <figcaption>1. Mouse Input</figcaption>
+        <img id="original-img" src="input_mouse.jpeg" alt="Mouse input sample">
+      </figure>
+      <figure class="frame">
+        <figcaption>2. Coaster Input</figcaption>
+        <img src="input_coaster.jpeg" alt="Coaster input sample">
+      </figure>
+      <figure class="frame">
+        <figcaption>3. Remote Input</figcaption>
+        <img src="input_remote.jpeg" alt="Remote input sample">
+      </figure>
+    </div>
     <figure class="frame">
       <figcaption>Output</figcaption>
       <canvas id="output-canvas"></canvas>
