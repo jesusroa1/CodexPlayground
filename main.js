@@ -5,10 +5,16 @@ let coasterImageReady = false;
 let coasterProcessed = false;
 let remoteImageReady = false;
 let remoteProcessed = false;
+let customImageReady = false;
+let customProcessed = false;
+let customObjectUrl = null;
 
 const originalImg = document.getElementById('original-img');
 const coasterImg = document.getElementById('coaster-img');
 const remoteImg = document.getElementById('remote-img');
+const customImg = document.getElementById('custom-img');
+const customInput = document.getElementById('custom-image-input');
+const customOutputFrame = document.getElementById('custom-output-frame');
 
 function tryProcessMouse() {
   if (alreadyProcessed || !cvRuntimeReady || !imageReady) {
@@ -40,9 +46,27 @@ function tryProcessRemote() {
   window.requestAnimationFrame(processRemoteImage);
 }
 
-function processMouseImage() {
-  const imageElement = document.getElementById('original-img');
-  if (!imageElement || typeof cv === 'undefined') {
+function tryProcessUploaded() {
+  if (customProcessed || !customImageReady) {
+    return;
+  }
+
+  if (typeof cv === 'undefined') {
+    return;
+  }
+
+  if (!cvRuntimeReady) {
+    return;
+  }
+
+  customProcessed = true;
+  window.requestAnimationFrame(processUploadedImage);
+}
+
+function processPrimarySubject(imageElementId, outputCanvasId, subjectName) {
+  const imageElement = document.getElementById(imageElementId);
+  const outputCanvas = document.getElementById(outputCanvasId);
+  if (!imageElement || !outputCanvas || typeof cv === 'undefined') {
     return;
   }
 
@@ -283,12 +307,12 @@ function processMouseImage() {
       const lineType = typeof cv.LINE_AA !== 'undefined' ? cv.LINE_AA : 8;
       cv.drawContours(working, contours, bestIndex, red, 3, lineType);
     } else {
-      console.warn('No contour detected for the mouse outline.');
+      console.warn(`No contour detected for the ${subjectName} outline.`);
     }
 
-    cv.imshow('output-canvas', working);
+    cv.imshow(outputCanvasId, working);
   } catch (error) {
-    console.error('OpenCV processing failed:', error);
+    console.error(`OpenCV processing failed for ${subjectName}:`, error);
   } finally {
     if (hierarchy) hierarchy.delete();
     if (contours) {
@@ -302,6 +326,14 @@ function processMouseImage() {
       }
     });
   }
+}
+
+function processMouseImage() {
+  processPrimarySubject('original-img', 'output-canvas', 'mouse');
+}
+
+function processUploadedImage() {
+  processPrimarySubject('custom-img', 'custom-output-canvas', 'uploaded image');
 }
 
 function processCoasterImage() {
@@ -1180,6 +1212,73 @@ if (remoteImg) {
   console.warn('Remote image element was not found.');
 }
 
+if (customImg) {
+  customImg.addEventListener('load', () => {
+    customImageReady = true;
+    customProcessed = false;
+    if (customOutputFrame) {
+      customOutputFrame.hidden = false;
+    }
+    tryProcessUploaded();
+  });
+
+  customImg.addEventListener('error', () => {
+    console.error('Failed to load the uploaded image.');
+  });
+}
+
+if (customInput) {
+  customInput.addEventListener('change', (event) => {
+    const { files } = event.target;
+    const file = files && files[0];
+    if (!file) {
+      return;
+    }
+
+    if (!file.type.startsWith('image/')) {
+      console.error('Please choose a valid image file.');
+      event.target.value = '';
+      return;
+    }
+
+    if (customObjectUrl) {
+      URL.revokeObjectURL(customObjectUrl);
+      customObjectUrl = null;
+    }
+
+    customImageReady = false;
+    customProcessed = false;
+    const objectUrl = URL.createObjectURL(file);
+    customObjectUrl = objectUrl;
+
+    if (customImg) {
+      customImg.src = objectUrl;
+      customImg.removeAttribute('hidden');
+    }
+
+    if (customOutputFrame) {
+      customOutputFrame.hidden = false;
+    }
+
+    const outputCanvas = document.getElementById('custom-output-canvas');
+    if (outputCanvas) {
+      const context = outputCanvas.getContext('2d');
+      if (context) {
+        context.clearRect(0, 0, outputCanvas.width || 0, outputCanvas.height || 0);
+      }
+    }
+
+    event.target.value = '';
+  });
+}
+
+window.addEventListener('beforeunload', () => {
+  if (customObjectUrl) {
+    URL.revokeObjectURL(customObjectUrl);
+    customObjectUrl = null;
+  }
+});
+
 function attachOpenCvListener() {
   if (typeof cv === 'undefined') {
     return false;
@@ -1191,6 +1290,7 @@ function attachOpenCvListener() {
     tryProcessMouse();
     tryProcessCoaster();
     tryProcessRemote();
+    tryProcessUploaded();
     return true;
   }
 
@@ -1199,6 +1299,7 @@ function attachOpenCvListener() {
     tryProcessMouse();
     tryProcessCoaster();
     tryProcessRemote();
+    tryProcessUploaded();
   };
   return true;
 }
@@ -1228,4 +1329,8 @@ if (coasterImageReady) {
 
 if (remoteImageReady) {
   tryProcessRemote();
+}
+
+if (customImageReady) {
+  tryProcessUploaded();
 }

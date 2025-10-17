@@ -67,6 +67,48 @@
     .frame canvas {
       background: #f0f1f6;
     }
+
+    .upload-control {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      align-items: stretch;
+    }
+
+    .upload-button-label {
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+      padding: 0.5rem 0.75rem;
+      border: 1px dashed #a2a5b5;
+      border-radius: 8px;
+      background: #f9f9fc;
+      cursor: pointer;
+      font-weight: 600;
+      transition: background 0.2s ease, border-color 0.2s ease;
+      text-align: center;
+      width: 100%;
+    }
+
+    .upload-button-label:hover {
+      background: #eef0ff;
+      border-color: #7378d1;
+    }
+
+    #custom-image-input {
+      display: none;
+    }
+
+    .upload-hint {
+      font-size: 0.8rem;
+      color: #4f5466;
+      margin: 0;
+      text-align: center;
+    }
+
+    .upload-control img {
+      margin-top: 0.25rem;
+    }
   </style>
 </head>
 <body>
@@ -85,6 +127,15 @@
         <figcaption>3. Remote Input</figcaption>
         <img id="remote-img" src="input_remote.jpeg" alt="Remote input sample">
       </figure>
+      <figure class="frame" id="custom-input-frame">
+        <figcaption>4. Upload Input</figcaption>
+        <div class="upload-control">
+          <label class="upload-button-label" for="custom-image-input">Choose Image</label>
+          <input id="custom-image-input" type="file" accept="image/*">
+          <p class="upload-hint">Upload a photo to detect and outline the main object.</p>
+          <img id="custom-img" alt="Uploaded input preview" hidden>
+        </div>
+      </figure>
     </div>
     <div class="outputs">
       <figure class="frame">
@@ -98,6 +149,10 @@
       <figure class="frame">
         <figcaption>Remote Output</figcaption>
         <canvas id="remote-output-canvas"></canvas>
+      </figure>
+      <figure class="frame" id="custom-output-frame" hidden>
+        <figcaption>Upload Output</figcaption>
+        <canvas id="custom-output-canvas"></canvas>
       </figure>
     </div>
   </section>
