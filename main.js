@@ -15,6 +15,8 @@ const remoteImg = document.getElementById('remote-img');
 const customImg = document.getElementById('custom-img');
 const customInput = document.getElementById('custom-image-input');
 const customOutputFrame = document.getElementById('custom-output-frame');
+const tabButtons = document.querySelectorAll('[data-tab-target]');
+const tabPanels = document.querySelectorAll('.tab-panel');
 
 function tryProcessMouse() {
   if (alreadyProcessed || !cvRuntimeReady || !imageReady) {
@@ -1334,3 +1336,172 @@ if (remoteImageReady) {
 if (customImageReady) {
   tryProcessUploaded();
 }
+
+function setActiveTab(target) {
+  if (!tabPanels.length || !tabButtons.length) {
+    return;
+  }
+
+  tabPanels.forEach((panel) => {
+    const isActive = panel.dataset.tab === target;
+    panel.toggleAttribute('hidden', !isActive);
+    panel.setAttribute('aria-hidden', String(!isActive));
+  });
+
+  tabButtons.forEach((button) => {
+    const isActive = button.dataset.tabTarget === target;
+    button.classList.toggle('is-active', isActive);
+    button.setAttribute('aria-selected', String(isActive));
+    button.setAttribute('tabindex', isActive ? '0' : '-1');
+  });
+}
+
+function escapeHtml(text) {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function formatInlineMarkdown(text) {
+  const segments = text.split(/`([^`]+)`/g);
+  return segments
+    .map((segment, index) => {
+      if (index % 2 === 1) {
+        return `<code>${escapeHtml(segment)}</code>`;
+      }
+      return escapeHtml(segment);
+    })
+    .join('');
+}
+
+function renderMarkdownExplanation() {
+  const container = document.getElementById('explanation-markdown');
+  if (!container) {
+    return;
+  }
+
+  const markdown = `# Object detection walkthrough
+
+## 1. Runtime readiness and image loading
+- \`attachOpenCvListener()\` waits for OpenCV.js to report that core classes like \`cv.Mat\` are available. Once ready, it flips \`cvRuntimeReady\` and kicks off every detection attempt.
+- Each demo image registers \`load\` listeners inside helpers such as \`tryProcessMouse()\`. These guards make sure we only call the heavy processing functions once per asset and only after both the image pixels and the OpenCV runtime are ready.
+- Uploads use the same gating: when you pick a file we create an object URL, show the preview, and clear any previous canvas drawings before handing the work to \`processPrimarySubject()\`.
+
+## 2. General subject extraction with \`processPrimarySubject()\`
+1. Read and normalise pixels – We load the image into a matrix, optionally resize it for performance, and cache every matrix that needs manual cleanup.
+2. Generate foreground seeds – The function converts the scene to grayscale, blurs it, and thresholds dark regions. It then focuses on the centre of the frame to find a candidate contour for the foreground object.
+3. Prime GrabCut – With the seed masks ready we label obvious background areas, probable foreground, and sure foreground pixels before calling \`cv.grabCut\`. When no good seed is found we fall back to a generous rectangle that still allows GrabCut to converge.
+4. Refine the mask – Morphological closing and opening remove holes and noise, a blur followed by binary thresholding smooths the mask, and we gather the largest plausible contour based on size and brightness.
+5. Render the outline – The best contour is drawn on top of the working image using anti-aliased lines, and the result is pushed to the appropriate output canvas via \`cv.imshow()\`.
+
+## 3. Coaster-specific pipeline
+- \`processCoasterImage()\` switches to HSV colour space to isolate the vibrant ring by combining saturation and value masks.
+- A circular centre mask and aggressive morphological closing/opening emphasise the circular coaster shape.
+- We score each contour by circularity so the round coaster outline wins over rectangular table edges, then draw the selected contour back on the resized image.
+
+## 4. Remote control fallback logic
+- Some OpenCV.js builds lack the functions we need, so \`processRemoteImage()\` ships with a pure JavaScript fallback.
+- The fallback path reads pixels with a hidden canvas, converts to grayscale, and applies a separable Gaussian blur along with a Sobel-like edge magnitude.
+- It thresholds the gradient image, runs a custom flood-fill labelling pass to score connected components, and finally fits a convex hull around the most remote-like region before drawing it.
+
+## 5. Handling uploads and cleanup
+- The upload workflow resets flags, revokes old object URLs, and clears the output canvas so each image starts fresh.
+- Before the page unloads we release any object URL that might still be held to avoid leaking browser memory.
+- Throughout the pipelines every OpenCV matrix lives inside a tracked array so the \`finally\` blocks can call \`.delete()\` and keep the WebAssembly heap healthy.`;
+
+  const lines = markdown.split(/\r?\n/);
+  const html = [];
+  let inUl = false;
+  let inOl = false;
+
+  const closeLists = () => {
+    if (inUl) {
+      html.push('</ul>');
+      inUl = false;
+    }
+    if (inOl) {
+      html.push('</ol>');
+      inOl = false;
+    }
+  };
+
+  lines.forEach((rawLine) => {
+    const line = rawLine.trimEnd();
+    if (!line.trim()) {
+      closeLists();
+      html.push('');
+      return;
+    }
+
+    if (line.startsWith('### ')) {
+      closeLists();
+      html.push(`<h3>${formatInlineMarkdown(line.slice(4).trim())}</h3>`);
+      return;
+    }
+
+    if (line.startsWith('## ')) {
+      closeLists();
+      html.push(`<h2>${formatInlineMarkdown(line.slice(3).trim())}</h2>`);
+      return;
+    }
+
+    if (line.startsWith('# ')) {
+      closeLists();
+      html.push(`<h1>${formatInlineMarkdown(line.slice(2).trim())}</h1>`);
+      return;
+    }
+
+    const orderedMatch = line.match(/^(\d+)\.\s+(.*)$/);
+    if (orderedMatch) {
+      if (inUl) {
+        html.push('</ul>');
+        inUl = false;
+      }
+      if (!inOl) {
+        html.push('<ol>');
+        inOl = true;
+      }
+      html.push(`<li>${formatInlineMarkdown(orderedMatch[2].trim())}</li>`);
+      return;
+    }
+
+    if (line.startsWith('- ')) {
+      if (inOl) {
+        html.push('</ol>');
+        inOl = false;
+      }
+      if (!inUl) {
+        html.push('<ul>');
+        inUl = true;
+      }
+      html.push(`<li>${formatInlineMarkdown(line.slice(2).trim())}</li>`);
+      return;
+    }
+
+    closeLists();
+    html.push(`<p>${formatInlineMarkdown(line.trim())}</p>`);
+  });
+
+  closeLists();
+
+  container.innerHTML = html.join('\n');
+}
+
+if (tabButtons.length && tabPanels.length) {
+  tabButtons.forEach((button) => {
+    button.type = 'button';
+    button.addEventListener('click', () => {
+      const target = button.dataset.tabTarget;
+      if (target) {
+        setActiveTab(target);
+      }
+    });
+  });
+
+  setActiveTab('gallery');
+}
+
+renderMarkdownExplanation();
