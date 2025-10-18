@@ -15,6 +15,88 @@ const remoteImg = document.getElementById('remote-img');
 const customImg = document.getElementById('custom-img');
 const customInput = document.getElementById('custom-image-input');
 const customOutputFrame = document.getElementById('custom-output-frame');
+const mouseDebugCanvases = {
+  prepared: 'mouse-step-resized',
+  grayscale: 'mouse-step-gray',
+  blurred: 'mouse-step-blur',
+  mask: 'mouse-step-mask',
+  contours: 'mouse-step-contours'
+};
+
+function initializeProcessingStepPanels() {
+  const toggleButtons = document.querySelectorAll('[data-step-toggle]');
+  toggleButtons.forEach((button) => {
+    const targetId = button.getAttribute('data-step-toggle');
+    if (!targetId) {
+      return;
+    }
+
+    const panel = document.getElementById(targetId);
+    if (!panel) {
+      return;
+    }
+
+    const showLabel = button.getAttribute('data-show-label') || 'Show steps';
+    const hideLabel = button.getAttribute('data-hide-label') || 'Hide steps';
+
+    const setExpanded = (expanded) => {
+      if (expanded) {
+        panel.removeAttribute('hidden');
+        button.setAttribute('aria-expanded', 'true');
+        button.textContent = hideLabel;
+      } else {
+        panel.setAttribute('hidden', '');
+        button.setAttribute('aria-expanded', 'false');
+        button.textContent = showLabel;
+      }
+    };
+
+    button.addEventListener('click', () => {
+      const expanded = button.getAttribute('aria-expanded') === 'true';
+      setExpanded(!expanded);
+    });
+
+    const panelIsVisible = !panel.hasAttribute('hidden');
+    setExpanded(panelIsVisible);
+  });
+}
+
+initializeProcessingStepPanels();
+
+function renderMatToCanvas(mat, canvasId) {
+  if (!mat || typeof cv === 'undefined') {
+    return;
+  }
+
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) {
+    return;
+  }
+
+  let displayMat = mat;
+  let convertedMat = null;
+
+  try {
+    const channels = typeof mat.channels === 'function' ? mat.channels() : 4;
+    if (channels === 1) {
+      convertedMat = new cv.Mat();
+      cv.cvtColor(mat, convertedMat, cv.COLOR_GRAY2RGBA);
+      displayMat = convertedMat;
+    } else if (channels === 3) {
+      convertedMat = new cv.Mat();
+      cv.cvtColor(mat, convertedMat, cv.COLOR_RGB2RGBA);
+      displayMat = convertedMat;
+    }
+
+    cv.imshow(canvasId, displayMat);
+  } catch (error) {
+    console.warn(`Unable to render debug canvas ${canvasId}:`, error);
+  } finally {
+    if (convertedMat) {
+      convertedMat.delete();
+    }
+  }
+}
 
 function tryProcessMouse() {
   if (alreadyProcessed || !cvRuntimeReady || !imageReady) {
@@ -63,7 +145,7 @@ function tryProcessUploaded() {
   window.requestAnimationFrame(processUploadedImage);
 }
 
-function processPrimarySubject(imageElementId, outputCanvasId, subjectName) {
+function processPrimarySubject(imageElementId, outputCanvasId, subjectName, debugCanvases) {
   const imageElement = document.getElementById(imageElementId);
   const outputCanvas = document.getElementById(outputCanvasId);
   if (!imageElement || !outputCanvas || typeof cv === 'undefined') {
@@ -75,6 +157,12 @@ function processPrimarySubject(imageElementId, outputCanvasId, subjectName) {
   let secondaryKernel;
   let contours;
   let hierarchy;
+  const showStep = (key, mat) => {
+    if (!debugCanvases || !debugCanvases[key]) {
+      return;
+    }
+    renderMatToCanvas(mat, debugCanvases[key]);
+  };
 
   try {
     const original = cv.imread(imageElement);
@@ -94,6 +182,7 @@ function processPrimarySubject(imageElementId, outputCanvasId, subjectName) {
     }
 
     const frameArea = working.rows * working.cols;
+    showStep('prepared', working);
 
     const rgb = new cv.Mat();
     cv.cvtColor(working, rgb, cv.COLOR_RGBA2RGB);
@@ -117,14 +206,17 @@ function processPrimarySubject(imageElementId, outputCanvasId, subjectName) {
     const gray = new cv.Mat();
     cv.cvtColor(rgb, gray, cv.COLOR_RGB2GRAY);
     matsToRelease.push(gray);
+    showStep('grayscale', gray);
 
     const grayBlurred = new cv.Mat();
     cv.GaussianBlur(gray, grayBlurred, new cv.Size(5, 5), 0);
     matsToRelease.push(grayBlurred);
+    showStep('blurred', grayBlurred);
 
     const darkMask = new cv.Mat();
     cv.threshold(grayBlurred, darkMask, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
     matsToRelease.push(darkMask);
+    showStep('mask', darkMask);
 
     const centralMask = cv.Mat.zeros(darkMask.rows, darkMask.cols, cv.CV_8UC1);
     matsToRelease.push(centralMask);
@@ -273,6 +365,7 @@ function processPrimarySubject(imageElementId, outputCanvasId, subjectName) {
     const binaryMask = new cv.Mat();
     cv.threshold(blurredMask, binaryMask, 128, 255, cv.THRESH_BINARY);
     matsToRelease.push(binaryMask);
+    showStep('contours', binaryMask);
 
     contours = new cv.MatVector();
     hierarchy = new cv.Mat();
@@ -329,7 +422,7 @@ function processPrimarySubject(imageElementId, outputCanvasId, subjectName) {
 }
 
 function processMouseImage() {
-  processPrimarySubject('original-img', 'output-canvas', 'mouse');
+  processPrimarySubject('original-img', 'output-canvas', 'mouse', mouseDebugCanvases);
 }
 
 function processUploadedImage() {
